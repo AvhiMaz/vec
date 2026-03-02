@@ -13,5 +13,8 @@ docs:
 clean:
 	cargo clean
 
+check:
+	cargo clippy
+
 fmt:
 	cargo +nightly fmt --all

@@ -52,16 +52,18 @@ impl<T> MyVec<T> {
     /// offset `len` using `ptr::write`, which copies the bytes without reading
     /// or dropping whatever was previously at that address.
     pub fn push(&mut self, data: T) {
-        if self.cap == self.len {
+        if core::mem::size_of::<T>() != 0 && self.cap == self.len {
             self.grow();
         }
 
-        unsafe {
-            // SAFETY: grow ensures ptr is valid for at least len+1 slots.
-            // The slot at len is uninitialized so ptr::write is used to
-            // avoid running Drop on whatever bytes are there.
-            let dst = self.ptr.add(self.len);
-            std::ptr::write(dst, data);
+        if core::mem::size_of::<T>() != 0 {
+            unsafe {
+                // SAFETY: grow ensures ptr is valid for at least len+1 slots.
+                // The slot at len is uninitialized so ptr::write is used to
+                // avoid running Drop on whatever bytes are there.
+                let dst = self.ptr.add(self.len);
+                std::ptr::write(dst, data);
+            }
         }
         self.len += 1;
     }
@@ -115,6 +117,9 @@ impl<T> MyVec<T> {
     /// If `alloc` or `realloc` returns a null pointer, `handle_alloc_error` is
     /// called. This aborts the process with an OOM message.
     fn grow(&mut self) {
+        if std::mem::size_of::<T>() == 0 {
+            return;
+        }
         let old_cap = self.cap;
         let new_cap;
         if old_cap == 0 {
@@ -174,11 +179,15 @@ impl<T> Drop for MyVec<T> {
                 }
             }
             let layout = std::alloc::Layout::array::<T>(self.cap).unwrap();
-            unsafe {
-                // SAFETY: ptr was allocated with this layout and cap > 0
-                // guarantees a real allocation exists. All elements have
-                // already been dropped above.
-                std::alloc::dealloc(self.ptr as *mut u8, layout);
+            if core::mem::size_of::<T>() == 0 {
+                return;
+            } else {
+                unsafe {
+                    // SAFETY: ptr was allocated with this layout and cap > 0
+                    // guarantees a real allocation exists. All elements have
+                    // already been dropped above.
+                    std::alloc::dealloc(self.ptr as *mut u8, layout);
+                }
             }
         }
     }
@@ -314,5 +323,16 @@ mod tests {
             v.push(D(&mut dropped));
         }
         assert!(dropped);
+    }
+
+    #[test]
+    fn zst_push_pop() {
+        let mut v: MyVec<()> = MyVec::new();
+        v.push(());
+        v.push(());
+        v.push(());
+        assert_eq!(v.len(), 3);
+        assert_eq!(v.pop(), Some(()));
+        assert_eq!(v.len(), 2);
     }
 }
