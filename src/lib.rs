@@ -150,13 +150,34 @@ impl<T> MyVec<T> {
     }
 }
 
+/// Drops all initialized elements and frees the heap allocation.
+///
+/// Elements are dropped in order from index `0` to `len - 1` before the
+/// heap block is deallocated. This ensures types like `String` or `Box<T>`
+/// that own memory elsewhere have their destructors called correctly.
+///
+/// Skips deallocation entirely if `cap == 0` since no allocation was ever made.
 impl<T> Drop for MyVec<T> {
     fn drop(&mut self) {
         if self.cap > 0 {
+            // Run the destructor on every initialized element first.
+            // This handles types like String or Box<T> that own heap memory
+            // themselves. For types like i32 this is a no-op.
+            // Must happen before dealloc - running drop_in_place after
+            // freeing the block would be use-after-free.
+            for i in 0..self.len() {
+                unsafe {
+                    // SAFETY: index is within [0, len) so the slot is
+                    // initialized. drop_in_place runs T's destructor in
+                    // place without moving the value out.
+                    std::ptr::drop_in_place(self.ptr.add(i));
+                }
+            }
             let layout = std::alloc::Layout::array::<T>(self.cap).unwrap();
             unsafe {
                 // SAFETY: ptr was allocated with this layout and cap > 0
-                // guarantees a real allocation exists.
+                // guarantees a real allocation exists. All elements have
+                // already been dropped above.
                 std::alloc::dealloc(self.ptr as *mut u8, layout);
             }
         }
@@ -277,5 +298,21 @@ mod tests {
         let mut v: MyVec<i32> = MyVec::new();
         v.push(1);
         let _ = v[99];
+    }
+
+    #[test]
+    fn drop_is_called() {
+        struct D<'a>(&'a mut bool);
+        impl Drop for D<'_> {
+            fn drop(&mut self) {
+                *self.0 = true;
+            }
+        }
+        let mut dropped = false;
+        {
+            let mut v = MyVec::new();
+            v.push(D(&mut dropped));
+        }
+        assert!(dropped);
     }
 }
