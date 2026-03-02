@@ -80,12 +80,19 @@ impl<T> MyVec<T> {
     /// without running `Drop` on the slot, transferring ownership to the caller.
     /// The heap memory for that slot is not freed - only `Drop` (or a future
     /// `push`) will touch it again.
+
     pub fn pop(&mut self) -> Option<T> {
         if self.len == 0 {
             return None;
         } else if core::mem::size_of::<T>() == 0 {
             self.len -= 1;
-            unsafe { Some(std::mem::zeroed()) }
+            let ptr = std::ptr::NonNull::<T>::dangling().as_ptr();
+            unsafe {
+                // SAFETY: T is a ZST so ptr::read does not access any memory.
+                // The dangling pointer is valid because no bytes are read.
+                let value = std::ptr::read(ptr);
+                Some(value)
+            }
         } else {
             self.len -= 1;
             unsafe {
@@ -108,11 +115,20 @@ impl<T> MyVec<T> {
         if index >= self.len {
             return None;
         }
-        unsafe {
-            // SAFETY: index is checked to be within [0, len) above,
-            // so the slot is initialized and ptr is non-null.
-            let value = &*self.ptr.add(index);
-            return Some(value);
+        if std::mem::size_of::<T>() == 0 {
+            unsafe {
+                // SAFETY: T is a ZST so no memory is accessed when forming
+                // this reference. NonNull::dangling() provides a non-null
+                // aligned pointer which is all a ZST reference requires.
+                Some(&*std::ptr::NonNull::<T>::dangling().as_ptr())
+            }
+        } else {
+            unsafe {
+                // SAFETY: index is checked to be within [0, len) above,
+                // so the slot is initialized and ptr is non-null.
+                let value = &*self.ptr.add(index);
+                return Some(value);
+            }
         }
     }
 
@@ -225,9 +241,18 @@ impl<T> std::ops::Index<usize> for MyVec<T> {
             panic!("Out of Bounds")
         }
 
-        unsafe {
-            // SAFETY: index is checked to be within [0, len) above.
-            return &*self.ptr.add(index);
+        if std::mem::size_of::<T>() == 0 {
+            unsafe {
+                // SAFETY: T is a ZST so no memory is accessed when forming
+                // this reference. NonNull::dangling() provides a non-null
+                // aligned pointer which is all a ZST reference requires.
+                &*(std::ptr::NonNull::<T>::dangling().as_ptr())
+            }
+        } else {
+            unsafe {
+                // SAFETY: index is checked to be within [0, len) above.
+                return &*self.ptr.add(index);
+            }
         }
     }
 }
