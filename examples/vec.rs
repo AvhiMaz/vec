@@ -1,4 +1,4 @@
-use vec::MyVec;
+use vec::raw_vec::MyVec;
 
 fn main() {
     let mut v: MyVec<i32> = MyVec::new();
