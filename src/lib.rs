@@ -181,6 +181,51 @@ impl<T> MyVec<T> {
             self.cap = new_cap;
         }
     }
+
+    /// Inserts `data` at `index`, shifting all elements after it one slot to
+    /// the right.
+    ///
+    /// If the vec is full, `grow` is called first. Elements from `index` to
+    /// `len - 1` are shifted right using `ptr::copy`, which handles
+    /// overlapping regions correctly. The value is then written into the gap
+    /// with `ptr::write`.
+    ///
+    /// For ZST, no memory is touched. `data` is forgotten and only `len` is
+    /// incremented.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index > len`.
+    pub fn insert(&mut self, index: usize, data: T) {
+        if index > self.len() {
+            panic!("Out of Bounds")
+        }
+
+        if core::mem::size_of::<T>() == 0 {
+            std::mem::forget(data);
+            self.len += 1;
+            return;
+        }
+
+        if self.len() == self.cap() {
+            self.grow();
+        }
+
+        unsafe {
+            // SAFETY: grow ensures capacity for at least len + 1 slots.
+            // ptr::copy handles the overlapping shift correctly. index is
+            // within [0, len] so both src and dst are valid. ptr::write
+            // initializes the now-empty slot at index.
+            std::ptr::copy(
+                self.ptr.add(index),     // src: start of the region to shift
+                self.ptr.add(index + 1), // dst: one slot to the right
+                self.len() - index,      // count: number of elements to shift
+            );
+            std::ptr::write(self.ptr.add(index), data);
+        }
+
+        self.len += 1;
+    }
 }
 
 /// Drops all initialized elements and frees the heap allocation.
@@ -408,5 +453,20 @@ mod tests {
         } // vec drops here
 
         assert_eq!(COUNT.load(Ordering::SeqCst), 3); // all three dropped
+    }
+
+    #[test]
+    fn insert_shifts_elements() {
+        let mut v = MyVec::new();
+        v.push(1);
+        v.push(2);
+        v.push(3);
+
+        v.insert(2, 4);
+        assert_eq!(v.len(), 4);
+        assert_eq!(v[0], 1);
+        assert_eq!(v[1], 2);
+        assert_eq!(v[2], 4);
+        assert_eq!(v[3], 3);
     }
 }
