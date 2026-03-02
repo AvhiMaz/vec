@@ -51,6 +51,8 @@ impl<T> MyVec<T> {
     /// the capacity. The value is then written directly into heap memory at
     /// offset `len` using `ptr::write`, which copies the bytes without reading
     /// or dropping whatever was previously at that address.
+    ///
+    /// For ZST, no allocation or write occurs. Only `len` is incremented.
     pub fn push(&mut self, data: T) {
         if core::mem::size_of::<T>() != 0 && self.cap == self.len {
             self.grow();
@@ -114,6 +116,10 @@ impl<T> MyVec<T> {
     /// doubles capacity on each call, which amortizes the cost of reallocation
     /// to O(1) per push on average.
     ///
+    /// No-op for ZST since no allocation is ever needed.
+    ///
+    /// Panics with "Capacity Overflow" if doubling would exceed `usize::MAX`.
+    ///
     /// If `alloc` or `realloc` returns a null pointer, `handle_alloc_error` is
     /// called. This aborts the process with an OOM message.
     fn grow(&mut self) {
@@ -125,7 +131,7 @@ impl<T> MyVec<T> {
         if old_cap == 0 {
             new_cap = 1;
         } else {
-            new_cap = old_cap * 2;
+            new_cap = old_cap.checked_mul(2).expect("Capacity Overflow");
         }
         unsafe {
             if old_cap == 0 {
@@ -334,5 +340,11 @@ mod tests {
         assert_eq!(v.len(), 3);
         assert_eq!(v.pop(), Some(()));
         assert_eq!(v.len(), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "Capacity Overflow")]
+    fn growth_overflow_panics() {
+        usize::MAX.checked_mul(2).expect("Capacity Overflow");
     }
 }
