@@ -28,6 +28,11 @@ impl<T> MyVec<T> {
         self.len
     }
 
+    /// Returns `true` if the vec contains no elements.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     /// Returns the total number of elements the vec can hold without reallocating.
     pub fn cap(&self) -> usize {
         self.cap
@@ -80,10 +85,9 @@ impl<T> MyVec<T> {
     /// without running `Drop` on the slot, transferring ownership to the caller.
     /// The heap memory for that slot is not freed - only `Drop` (or a future
     /// `push`) will touch it again.
-
     pub fn pop(&mut self) -> Option<T> {
         if self.len == 0 {
-            return None;
+            None
         } else if core::mem::size_of::<T>() == 0 {
             self.len -= 1;
             unsafe {
@@ -100,7 +104,7 @@ impl<T> MyVec<T> {
                 // initialized slot. ptr::read moves ownership out without
                 // running Drop on the original slot.
                 let value = std::ptr::read(self.ptr.add(self.len));
-                return Some(value);
+                Some(value)
             }
         }
     }
@@ -127,7 +131,7 @@ impl<T> MyVec<T> {
                 // SAFETY: index is checked to be within [0, len) above,
                 // so the slot is initialized and ptr is non-null.
                 let value = &*self.ptr.add(index);
-                return Some(value);
+                Some(value)
             }
         }
     }
@@ -149,12 +153,11 @@ impl<T> MyVec<T> {
             return;
         }
         let old_cap = self.cap;
-        let new_cap;
-        if old_cap == 0 {
-            new_cap = 1;
+        let new_cap = if old_cap == 0 {
+            1
         } else {
-            new_cap = old_cap.checked_mul(2).expect("Capacity Overflow");
-        }
+            old_cap.checked_mul(2).expect("Capacity Overflow")
+        };
         unsafe {
             if old_cap == 0 {
                 let new_layout = std::alloc::Layout::array::<T>(new_cap).unwrap();
@@ -267,8 +270,14 @@ impl<T> MyVec<T> {
                 self.len() - index - 1,
             );
             self.len -= 1;
-            return value;
+            value
         }
+    }
+}
+
+impl<T> Default for MyVec<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -340,7 +349,7 @@ impl<T> std::ops::Index<usize> for MyVec<T> {
         } else {
             unsafe {
                 // SAFETY: index is checked to be within [0, len) above.
-                return &*self.ptr.add(index);
+                &*self.ptr.add(index)
             }
         }
     }

@@ -13,3 +13,9 @@ impl<T> AppendVec<T> {
         }
     }
 }
+
+impl<T> Default for AppendVec<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
