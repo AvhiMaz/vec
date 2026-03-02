@@ -86,10 +86,10 @@ impl<T> MyVec<T> {
             return None;
         } else if core::mem::size_of::<T>() == 0 {
             self.len -= 1;
-            let ptr = std::ptr::NonNull::<T>::dangling().as_ptr();
             unsafe {
                 // SAFETY: T is a ZST so ptr::read does not access any memory.
                 // The dangling pointer is valid because no bytes are read.
+                let ptr = std::ptr::NonNull::<T>::dangling().as_ptr();
                 let value = std::ptr::read(ptr);
                 Some(value)
             }
@@ -225,6 +225,50 @@ impl<T> MyVec<T> {
         }
 
         self.len += 1;
+    }
+
+    /// Removes and returns the element at `index`, shifting all elements
+    /// after it one slot to the left.
+    ///
+    /// `ptr::read` moves ownership out of the slot at `index` without running
+    /// `Drop` on it. `ptr::copy` then closes the gap by shifting the tail
+    /// left. `len` is decremented after the shift.
+    ///
+    /// For ZST, no memory is touched. `len` is decremented and a value is
+    /// conjured from a dangling pointer since no bytes are read.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index >= len`.
+    pub fn remove(&mut self, index: usize) -> T {
+        if index >= self.len() {
+            panic!("Out of Bounds")
+        }
+
+        if std::mem::size_of::<T>() == 0 {
+            unsafe {
+                // SAFETY: T is a ZST so ptr::read does not access any memory.
+                // The dangling pointer is valid because no bytes are read.
+                self.len -= 1;
+                let src = std::ptr::NonNull::<T>::dangling().as_ptr();
+                return std::ptr::read(src);
+            }
+        }
+
+        unsafe {
+            // SAFETY: index is within [0, len) so ptr::read is valid and
+            // moves ownership out without running Drop. ptr::copy handles
+            // the overlapping shift correctly. len is decremented after
+            // the shift so Drop sees the correct initialized range.
+            let value = std::ptr::read(self.ptr.add(index));
+            std::ptr::copy(
+                self.ptr.add(index + 1),
+                self.ptr.add(index),
+                self.len() - index - 1,
+            );
+            self.len -= 1;
+            return value;
+        }
     }
 }
 
@@ -468,5 +512,21 @@ mod tests {
         assert_eq!(v[1], 2);
         assert_eq!(v[2], 4);
         assert_eq!(v[3], 3);
+    }
+
+    #[test]
+    fn remove_shift_element() {
+        let mut v = MyVec::new();
+        v.push(1);
+        v.push(2);
+        v.push(4);
+        v.push(3);
+
+        let removed = v.remove(2);
+        assert_eq!(removed, 4);
+        assert_eq!(v.len(), 3);
+        assert_eq!(v[0], 1);
+        assert_eq!(v[1], 2);
+        assert_eq!(v[2], 3);
     }
 }
