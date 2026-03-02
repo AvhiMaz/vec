@@ -58,7 +58,9 @@ impl<T> MyVec<T> {
             self.grow();
         }
 
-        if core::mem::size_of::<T>() != 0 {
+        if core::mem::size_of::<T>() == 0 {
+            std::mem::forget(data);
+        } else {
             unsafe {
                 // SAFETY: grow ensures ptr is valid for at least len+1 slots.
                 // The slot at len is uninitialized so ptr::write is used to
@@ -67,6 +69,7 @@ impl<T> MyVec<T> {
                 std::ptr::write(dst, data);
             }
         }
+
         self.len += 1;
     }
 
@@ -80,6 +83,9 @@ impl<T> MyVec<T> {
     pub fn pop(&mut self) -> Option<T> {
         if self.len == 0 {
             return None;
+        } else if core::mem::size_of::<T>() == 0 {
+            self.len -= 1;
+            unsafe { Some(std::mem::zeroed()) }
         } else {
             self.len -= 1;
             unsafe {
@@ -170,30 +176,38 @@ impl<T> MyVec<T> {
 /// Skips deallocation entirely if `cap == 0` since no allocation was ever made.
 impl<T> Drop for MyVec<T> {
     fn drop(&mut self) {
-        if self.cap > 0 {
-            // Run the destructor on every initialized element first.
-            // This handles types like String or Box<T> that own heap memory
-            // themselves. For types like i32 this is a no-op.
-            // Must happen before dealloc - running drop_in_place after
-            // freeing the block would be use-after-free.
-            for i in 0..self.len() {
-                unsafe {
-                    // SAFETY: index is within [0, len) so the slot is
-                    // initialized. drop_in_place runs T's destructor in
-                    // place without moving the value out.
-                    std::ptr::drop_in_place(self.ptr.add(i));
-                }
+        // Run the destructor on every initialized element first.
+        // This handles types like String or Box<T> that own heap memory
+        // themselves. For types like i32 this is a no-op.
+        // Must happen before dealloc - running drop_in_place after
+        // freeing the block would be use-after-free.
+        //
+        // For ZST, self.ptr is null (no allocation was ever made), so we
+        // use a dangling non-null pointer instead. drop_in_place for ZST
+        // only runs the destructor - it never dereferences the pointer for
+        // a memory read, so any aligned non-null address is safe.
+        let ptr = if core::mem::size_of::<T>() == 0 {
+            std::ptr::NonNull::dangling().as_ptr()
+        } else {
+            self.ptr
+        };
+        for i in (0..self.len()).rev() {
+            unsafe {
+                // SAFETY: index is within [0, len) so the slot is
+                // initialized. drop_in_place runs T's destructor in
+                // place without moving the value out. For ZST, ptr is
+                // a dangling non-null pointer which is valid for
+                // drop_in_place since no memory access occurs.
+                std::ptr::drop_in_place(ptr.add(i));
             }
+        }
+        if self.cap > 0 && core::mem::size_of::<T>() != 0 {
             let layout = std::alloc::Layout::array::<T>(self.cap).unwrap();
-            if core::mem::size_of::<T>() == 0 {
-                return;
-            } else {
-                unsafe {
-                    // SAFETY: ptr was allocated with this layout and cap > 0
-                    // guarantees a real allocation exists. All elements have
-                    // already been dropped above.
-                    std::alloc::dealloc(self.ptr as *mut u8, layout);
-                }
+            unsafe {
+                // SAFETY: ptr was allocated with this layout and cap > 0
+                // guarantees a real allocation exists. All elements have
+                // already been dropped above.
+                std::alloc::dealloc(self.ptr as *mut u8, layout);
             }
         }
     }
@@ -346,5 +360,28 @@ mod tests {
     #[should_panic(expected = "Capacity Overflow")]
     fn growth_overflow_panics() {
         usize::MAX.checked_mul(2).expect("Capacity Overflow");
+    }
+
+    #[test]
+    fn zst_drop_runs_on_vec_drop() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNT: AtomicUsize = AtomicUsize::new(0);
+
+        struct Z;
+        impl Drop for Z {
+            fn drop(&mut self) {
+                COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        {
+            let mut v = MyVec::new();
+            v.push(Z);
+            v.push(Z);
+            v.push(Z);
+            assert_eq!(COUNT.load(Ordering::SeqCst), 0); // not dropped yet
+        } // vec drops here
+
+        assert_eq!(COUNT.load(Ordering::SeqCst), 3); // all three dropped
     }
 }

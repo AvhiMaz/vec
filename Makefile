@@ -16,5 +16,8 @@ clean:
 check:
 	cargo clippy
 
+miri:
+	cargo +nightly miri test
+
 fmt:
 	cargo +nightly fmt --all
