@@ -50,75 +50,66 @@ impl<T> AppendVec<T> {
 
     /// Appends `data` to the end of the vec.
     ///
-    /// If the vec is full (`len == cap`), `grow` is called first to double
-    /// capacity. The value is written into the heap slot at `len` using
-    /// `ptr::write`, then `len` is incremented with `Release` ordering so
-    /// concurrent readers see the new element only after it is fully written.
+    /// Panics if the vec is full (`len == cap`). The vec is fixed-capacity —
+    /// it never reallocates, which keeps existing pointers held by concurrent
+    /// readers valid for the lifetime of the vec.
+    ///
+    /// The value is written into the heap slot at `len` using `ptr::write`,
+    /// then `len` is incremented with `Release` ordering so concurrent readers
+    /// see the new element only after it is fully written.
+    ///
+    /// For ZST, no memory is written. `data` is forgotten and only `len` is
+    /// incremented — ZSTs carry no bytes so capacity is irrelevant.
     pub fn append(&mut self, data: T) {
         if core::mem::size_of::<T>() != 0 && self.cap == self.len() {
-            self.grow();
+            panic!("Out of Bounds")
         }
 
         if core::mem::size_of::<T>() == 0 {
             std::mem::forget(data);
         } else {
             unsafe {
-                // SAFETY: grow ensures ptr is valid for at least len+1 slots.
-                // The slot at len is uninitialized so ptr::write is used to
-                // avoid running Drop on whatever bytes are there.
+                // SAFETY: with_capacity ensures ptr is valid for `cap` slots.
+                // We checked len < cap above, so this slot is in bounds.
+                // The slot is uninitialized so ptr::write is used to avoid
+                // running Drop on whatever bytes happen to be there.
                 std::ptr::write(self.ptr.add(self.len()), data);
             }
-            // Release pairs with Acquire in len() and get() - ensures the write
-            // above is visible to any thread that observes the incremented len.
+            // Release pairs with Acquire in len() and get() — ensures the
+            // write above is visible to any thread that observes the
+            // incremented len.
         }
 
         self.len.fetch_add(1, std::sync::atomic::Ordering::Release);
     }
 
-    /// Grows the heap allocation to fit more elements.
+    /// Creates a new `AppendVec<T>` with `cap` pre-allocated slots.
     ///
-    /// Doubles capacity on each call. No-op for ZST.
+    /// The full capacity is allocated upfront and never changes. This is
+    /// intentional: reallocating would move the heap block to a new address,
+    /// invalidating any pointers held by concurrent readers.
     ///
-    /// Panics with "Capacity Overflow" if doubling would exceed `usize::MAX`.
-    fn grow(&mut self) {
-        if core::mem::size_of::<T>() == 0 {
-            return;
-        }
-        let old_cap = self.cap;
-        let new_cap = if old_cap == 0 {
-            1
+    /// Returns an empty `AppendVec` (same as `new`) when `cap == 0` or `T`
+    /// is a ZST, since neither case requires heap memory.
+    pub fn with_capacity(cap: usize) -> Self {
+        if cap == 0 || core::mem::size_of::<T>() == 0 {
+            return Self::new();
         } else {
-            old_cap.checked_mul(2).expect("Capacity Overflow")
-        };
-
-        if old_cap == 0 {
-            let layout = std::alloc::Layout::array::<T>(new_cap).unwrap();
             unsafe {
-                // SAFETY: layout is non-zero sized.
+                let layout = std::alloc::Layout::array::<T>(cap).unwrap();
                 let new_ptr = std::alloc::alloc(layout);
+
                 if new_ptr.is_null() {
                     std::alloc::handle_alloc_error(layout)
-                } else {
-                    self.ptr = new_ptr as *mut T;
                 }
-            }
-        } else {
-            let old_layout = std::alloc::Layout::array::<T>(old_cap).unwrap();
-            let new_layout = std::alloc::Layout::array::<T>(new_cap).unwrap();
 
-            unsafe {
-                // SAFETY: ptr was allocated with old_layout and is non-null.
-                let new_ptr =
-                    std::alloc::realloc(self.ptr as *mut u8, old_layout, new_layout.size());
-
-                if new_ptr.is_null() {
-                    std::alloc::handle_alloc_error(new_layout)
-                } else {
-                    self.ptr = new_ptr as *mut T
-                }
+                return AppendVec {
+                    ptr: new_ptr as *mut T,
+                    cap,
+                    len: std::sync::atomic::AtomicUsize::new(0),
+                };
             }
         }
-        self.cap = new_cap;
     }
 }
 
