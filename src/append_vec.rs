@@ -119,7 +119,8 @@ impl<T> AppendVec<T> {
                 // We checked len < cap above, so this slot is in bounds.
                 // The slot is uninitialized so ptr::write is used to avoid
                 // running Drop on whatever bytes happen to be there.
-                std::ptr::write(self.ptr.add(self.len()), data);
+                let len = *self.len.get_mut();
+                std::ptr::write(self.ptr.add(len), data);
             }
             // Release pairs with Acquire in len() and get() - ensures the
             // write above is visible to any thread that observes the
@@ -137,6 +138,13 @@ impl<T> AppendVec<T> {
     ///
     /// Returns an empty `AppendVec` (same as `new`) when `cap == 0` or `T`
     /// is a ZST, since neither case requires heap memory.
+    ///
+    /// # ZST note
+    ///
+    /// For zero-sized types, `cap()` always returns 0 regardless of the value
+    /// passed here. This is intentional - ZSTs carry no bytes so no allocation
+    /// ever occurs and capacity is meaningless. The bounds check in `append`
+    /// is skipped entirely for ZSTs, so they can be appended without limit.
     pub fn with_capacity(cap: usize) -> Self {
         if cap == 0 || core::mem::size_of::<T>() == 0 {
             Self::new()
