@@ -48,9 +48,42 @@ impl<T> AppendVec<T> {
         }
     }
 
+    /// Returns a shared reference to the element at `index`, or `None` if
+    /// `index` is out of bounds.
+    ///
+    /// `len` is loaded with `Acquire` ordering first, then the index is
+    /// bounds-checked against it. This pairs with the `Release` store in
+    /// `append`, guaranteeing that any slot visible through this method is
+    /// fully written - readers can never observe partially initialized data.
+    ///
+    /// For ZST, no memory is accessed. A dangling non-null pointer is used
+    /// since a ZST reference requires only alignment, not a real address.
+    pub fn get(&self, index: usize) -> Option<&T> {
+        let len = self.len.load(std::sync::atomic::Ordering::Acquire);
+
+        if index >= len {
+            return None;
+        }
+
+        if core::mem::size_of::<T>() == 0 {
+            unsafe {
+                // SAFETY: T is a ZST so no memory is accessed when forming
+                // this reference. NonNull::dangling() provides a non-null
+                // aligned pointer which is all a ZST reference requires.
+                Some(&*std::ptr::NonNull::<T>::dangling().as_ptr())
+            }
+        } else {
+            unsafe {
+                // SAFETY: index < len (Acquire) guarantees the slot is fully
+                // initialized. ptr is non-null and valid for `cap` slots.
+                Some(&*self.ptr.add(index))
+            }
+        }
+    }
+
     /// Appends `data` to the end of the vec.
     ///
-    /// Panics if the vec is full (`len == cap`). The vec is fixed-capacity —
+    /// Panics if the vec is full (`len == cap`). The vec is fixed-capacity -
     /// it never reallocates, which keeps existing pointers held by concurrent
     /// readers valid for the lifetime of the vec.
     ///
@@ -59,7 +92,7 @@ impl<T> AppendVec<T> {
     /// see the new element only after it is fully written.
     ///
     /// For ZST, no memory is written. `data` is forgotten and only `len` is
-    /// incremented — ZSTs carry no bytes so capacity is irrelevant.
+    /// incremented - ZSTs carry no bytes so capacity is irrelevant.
     pub fn append(&mut self, data: T) {
         if core::mem::size_of::<T>() != 0 && self.cap == self.len() {
             panic!("Out of Bounds")
@@ -75,7 +108,7 @@ impl<T> AppendVec<T> {
                 // running Drop on whatever bytes happen to be there.
                 std::ptr::write(self.ptr.add(self.len()), data);
             }
-            // Release pairs with Acquire in len() and get() — ensures the
+            // Release pairs with Acquire in len() and get() - ensures the
             // write above is visible to any thread that observes the
             // incremented len.
         }
@@ -93,7 +126,7 @@ impl<T> AppendVec<T> {
     /// is a ZST, since neither case requires heap memory.
     pub fn with_capacity(cap: usize) -> Self {
         if cap == 0 || core::mem::size_of::<T>() == 0 {
-            return Self::new();
+            Self::new()
         } else {
             unsafe {
                 let layout = std::alloc::Layout::array::<T>(cap).unwrap();
@@ -103,11 +136,11 @@ impl<T> AppendVec<T> {
                     std::alloc::handle_alloc_error(layout)
                 }
 
-                return AppendVec {
+                AppendVec {
                     ptr: new_ptr as *mut T,
                     cap,
                     len: std::sync::atomic::AtomicUsize::new(0),
-                };
+                }
             }
         }
     }
