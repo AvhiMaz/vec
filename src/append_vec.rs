@@ -212,3 +212,118 @@ impl<T> Default for AppendVec<T> {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::AppendVec;
+
+    #[test]
+    fn new_is_empty() {
+        let v: AppendVec<i32> = AppendVec::new();
+        assert_eq!(v.len(), 0);
+        assert_eq!(v.cap(), 0);
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn with_capacity_sets_cap() {
+        let v: AppendVec<i32> = AppendVec::with_capacity(8);
+        assert_eq!(v.cap(), 8);
+        assert_eq!(v.len(), 0);
+    }
+
+    #[test]
+    fn append_and_get() {
+        let mut v = AppendVec::with_capacity(4);
+        v.append(10);
+        v.append(20);
+        v.append(30);
+        assert_eq!(v.len(), 3);
+        assert_eq!(v.get(0), Some(&10));
+        assert_eq!(v.get(1), Some(&20));
+        assert_eq!(v.get(2), Some(&30));
+    }
+
+    #[test]
+    fn get_out_of_bounds_returns_none() {
+        let mut v = AppendVec::with_capacity(4);
+        v.append(1);
+        assert_eq!(v.get(1), None);
+        assert_eq!(v.get(99), None);
+    }
+
+    #[test]
+    #[should_panic]
+    fn append_panics_when_full() {
+        let mut v = AppendVec::with_capacity(2);
+        v.append(1);
+        v.append(2);
+        v.append(3); // should panic
+    }
+
+    #[test]
+    fn drop_runs_destructors() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNT: AtomicUsize = AtomicUsize::new(0);
+
+        struct D;
+        impl Drop for D {
+            fn drop(&mut self) {
+                COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        {
+            let mut v = AppendVec::with_capacity(3);
+            v.append(D);
+            v.append(D);
+            v.append(D);
+            assert_eq!(COUNT.load(Ordering::SeqCst), 0);
+        }
+
+        assert_eq!(COUNT.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn drop_empty_with_capacity_no_leak() {
+        // dropping a vec that was allocated but never written to should not crash
+        let _v: AppendVec<i32> = AppendVec::with_capacity(16);
+    }
+
+    #[test]
+    fn zst_append_and_get() {
+        let mut v: AppendVec<()> = AppendVec::with_capacity(4);
+        v.append(());
+        v.append(());
+        assert_eq!(v.len(), 2);
+        assert_eq!(v.get(0), Some(&()));
+        assert_eq!(v.get(1), Some(&()));
+        assert_eq!(v.get(2), None);
+    }
+
+    #[test]
+    fn concurrent_reads() {
+        use std::sync::Arc;
+
+        let mut v = AppendVec::with_capacity(100);
+        for i in 0..100_i32 {
+            v.append(i);
+        }
+
+        let v = Arc::new(v);
+        let mut handles = vec![];
+
+        for _ in 0..8 {
+            let v = Arc::clone(&v);
+            handles.push(std::thread::spawn(move || {
+                for i in 0..100_i32 {
+                    assert_eq!(v.get(i as usize), Some(&i));
+                }
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+    }
+}
