@@ -1,5 +1,5 @@
 run:
-	cargo run --example vec
+	cargo run --example raw_vec && 	cargo run --example append_vec
 
 test:
 	cargo test
