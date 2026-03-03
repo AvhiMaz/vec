@@ -146,6 +146,46 @@ impl<T> AppendVec<T> {
     }
 }
 
+/// Drops all initialized elements and frees the heap allocation.
+///
+/// At drop time we hold `&mut self` so no concurrent readers exist.
+/// `get_mut()` is used instead of an atomic load - no ordering overhead
+/// is needed when we have exclusive access.
+///
+/// Elements are dropped in reverse order before `dealloc` so types like
+/// `String` or `Box<T>` have their destructors called before the backing
+/// memory is freed. Dealloc is skipped when `cap == 0` (no allocation
+/// was ever made) or T is a ZST (no heap was ever touched).
+impl<T> Drop for AppendVec<T> {
+    fn drop(&mut self) {
+        let len = *self.len.get_mut();
+        let ptr = if core::mem::size_of::<T>() == 0 {
+            // SAFETY: T is a ZST - drop_in_place never dereferences the
+            // pointer, so any aligned non-null address is valid here.
+            std::ptr::NonNull::dangling().as_ptr()
+        } else {
+            self.ptr
+        };
+        for i in (0..len).rev() {
+            unsafe {
+                // SAFETY: index is within [0, len) so the slot is
+                // initialized. drop_in_place runs T's destructor in place
+                // without moving the value out.
+                std::ptr::drop_in_place(ptr.add(i));
+            }
+        }
+        if self.cap > 0 && core::mem::size_of::<T>() != 0 {
+            let layout = std::alloc::Layout::array::<T>(self.cap).unwrap();
+            unsafe {
+                // SAFETY: ptr was allocated with this layout and cap > 0
+                // guarantees a real allocation exists. All elements have
+                // already been dropped above.
+                std::alloc::dealloc(self.ptr as *mut u8, layout);
+            }
+        }
+    }
+}
+
 impl<T> Default for AppendVec<T> {
     fn default() -> Self {
         Self::new()
