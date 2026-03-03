@@ -20,6 +20,19 @@ pub struct AppendVec<T> {
     len: std::sync::atomic::AtomicUsize,
 }
 
+// SAFETY: AppendVec<T> is Send if T is Send. The writer holds &mut self
+// (exclusive access), so only one thread writes at a time. T values are
+// moved to the heap which requires T: Send.
+unsafe impl<T: Send> Send for AppendVec<T> {}
+
+// SAFETY: AppendVec<T> is Sync if T is Sync. Multiple threads may call
+// get() concurrently, each receiving a &T. For two threads to safely
+// hold &T to the same slot simultaneously, T must be Sync. The
+// Acquire/Release ordering on len ensures readers only see fully
+// initialized slots.
+
+unsafe impl<T: Sync> Sync for AppendVec<T> {}
+
 impl<T> AppendVec<T> {
     /// Returns the number of elements currently stored.
     ///
